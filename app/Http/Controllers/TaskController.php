@@ -71,8 +71,21 @@ class TaskController extends Controller
         return redirect('/tasks');
     }
 
+    public function update(Request $request, Task $task)
+    {
+        $this->validate($request, [
+            'name' => 'required|max:255',
+        ]);
+
+        $task->update([
+            'name'=>$request->name,
+        ]);
+
+        return redirect('/tasks');
+    }
+
     public function react()
     {
-        return redirect('/tasks');
+        return view('react');
     }
 }
