@@ -20,7 +20,7 @@ use Illuminate\Http\Request;
 Route::post('register/{user_id}', 'Auth\RegisterController@register');
  Route::group(['middleware' => 'auth:api'], function() {
     Route::get('tasks', 'TaskAPIController@index');
-    Route::post('task/store', 'TaskAPIController@store');
-    Route::post('task/update/{task_id}', 'TaskAPIController@update');
-    Route::delete('task/delete/{task_id}', 'TaskAPIController@delete');
+    Route::post('tasks', 'TaskAPIController@store');
+    Route::put('tasks/{task_id}', 'TaskAPIController@update');
+    Route::delete('tasks/{task_id}', 'TaskAPIController@delete');
  });
