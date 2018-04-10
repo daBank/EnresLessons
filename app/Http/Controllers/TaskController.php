@@ -30,7 +30,7 @@ class TaskController extends Controller
     {
         $tasks = $request->user()->tasks()->get();
 
-    return view('tasks.index', [
+        return view('tasks.index', [
         'tasks' => $tasks,
     ]);
     }
@@ -78,7 +78,7 @@ class TaskController extends Controller
         ]);
 
         $task->update([
-            'name'=>$request->name,
+            // 'name'=>$request->name,
         ]);
 
         return redirect('/tasks');
@@ -88,4 +88,5 @@ class TaskController extends Controller
     {
         return view('react');
     }
+
 }

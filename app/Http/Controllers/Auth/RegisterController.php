@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Foundation\Auth\RegistersUsers;
 
+use Illuminate\Http\Request;
+
 class RegisterController extends Controller
 {
     /*
@@ -68,5 +70,16 @@ class RegisterController extends Controller
             'email' => $data['email'],
             'password' => Hash::make($data['password']),
         ]);
+    }
+
+    protected function register(Request $request, $userId)
+    {
+        $user=User::find( (int) $userId);
+        if ($user) {
+            $user->generateToken();
+        }
+        else return  response()->json($userId, 201);
+        return response()->json(['data' => $user->toArray()], 201);
+        // return response()->json($userId, 201);
     }
 }
