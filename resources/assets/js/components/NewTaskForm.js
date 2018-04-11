@@ -1,4 +1,5 @@
 import React, { Component } from 'react';
+import TaskActionCreators from '../actions/TaskActionCreators';
 
 export class NewTaskForm extends Component {
     constructor(props) {
@@ -16,7 +17,7 @@ export class NewTaskForm extends Component {
     handleSubmit(event) {
 
         event.preventDefault();
-        this.props.handleAdd(this.state.name);
+        TaskActionCreators.addTask(this.state.name);
         this.setState({ name: "" });
     }
 

@@ -7,7 +7,7 @@ import { Panel } from './Panel';
 export  class PanelCreateTask extends Component {
     render() {
         const header = <PanelHeading message="New Task" />
-        const body = <NewTaskForm handleAdd={this.props.handleAdd} />;
+        const body = <NewTaskForm />;
 
         return (
             <Panel header={header} body={body} />
