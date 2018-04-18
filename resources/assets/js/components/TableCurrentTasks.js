@@ -15,8 +15,6 @@ export class TableCurrentTasks extends Component {
                     <tbody>
                         <tr>
 
-                            <form onSubmit={this.handleSubmit}>
-
                                 <td className="table-text">
                                     <div id="name-task-id">
                                     </div>
@@ -47,7 +45,6 @@ export class TableCurrentTasks extends Component {
 
 
                                 </td>
-                            </form>
 
                             <td className="table-text">
                                 <form action="url" method="POST" onSubmit={this.handleClick}>

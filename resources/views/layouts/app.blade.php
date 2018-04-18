@@ -20,6 +20,13 @@
     <!-- Styles -->
     <link href="{{ mix('css/app.css') }}" rel="stylesheet">
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
+
+    <script>
+    window.Laravel = <?php echo json_encode([
+      'csrfToken' => csrf_token(),
+      'apiToken' => Auth::user() ? Auth::user()->api_token : '',
+    ]); ?>
+  </script>
 </head>
 <body>
     <div id="app">

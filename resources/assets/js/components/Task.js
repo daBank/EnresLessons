@@ -5,6 +5,18 @@ export class Task extends Component {
         super(props);
         this.state = { name: "", edit: false };
 
+        this.saveButton = null;
+        this.setSaveButtonRef = element => {
+          this.saveButton = element;
+        };
+        this.toggleButton = () => {
+            // disabledButton using the raw DOM API
+            console.log("Tetsetset");
+               if (this.saveButton){
+                   this.saveButton.disabled=!this.saveButton.disabled;
+                }
+        };
+
         this.handleChange = this.handleChange.bind(this)
         this.handleDelete = this.handleDelete.bind(this);
         this.handleEdit = this.handleEdit.bind(this);
@@ -14,13 +26,17 @@ export class Task extends Component {
 
     handleChange(event) {
         this.setState({...this.state,  name: event.target.value });
+        if(event.target.value == "")
+        {
+            this.toggleButton();
+        }
+        else
+        {
+            if(this.saveButton.disabled) this.toggleButton();
+        }
     }
 
     handleDelete() {
-        console.log("t delete id: " + this.props.task.id);
-        // TO DELETE
-        console.log(this.props.handleDelete);
-        // event.preventDefault();
         this.props.handleDelete(this.props.task.id);
     }
 
@@ -43,29 +59,86 @@ export class Task extends Component {
     }
 
     render() {
-        let taskElement = <div>
-            <span>{this.props.task.name}</span>
-            <button onClick={this.handleEdit}>
-                Edit
+
+
+        let taskElement = 
+        <tr>
+            <td className="table-text">
+                <div id="name-task-id">
+                {this.props.task.id}:{this.props.task.name}
+                </div>
+                
+            </td>
+
+            <td className="table-text">
+                <button type="button" id="edit-task-id" className="btn btn-warning" onClick={this.handleEdit}>
+                    <i className="fa fa-btn fa-trash"></i>Edit
+                </button>
+
+                
+            </td>
+
+            <td className="table-text">
+                    <button id="delete-task-id" className="btn btn-danger" onClick={this.handleDelete}>
+                        <i className="fa fa-btn fa-trash"></i>Delete
                     </button>
-            <button onClick={this.handleDelete}>
-                Delete
+            </td>
+
+        </tr>;
+        
+
+        if(this.state.edit){
+            taskElement =
+            <tr>
+                <td className="table-text">
+                    <div className="col-sm-12 hidden-xs hidden-sm" id="input-task-id">
+                        <input name="name" type="text" className="form-control"
+                            value={this.state.name} onChange={this.handleChange} aria-label="Task Name" aria-describedby="basic-addon2" />
+                    </div>
+                </td>
+                
+                <td>
+                    <div className="hidden-xs hidden-sm" id="save-task-id">
+                        <button type="submit" className="btn btn-info" onClick={this.handleSave} ref={this.setSaveButtonRef}>
+                            <i className="fa fa-btn fa-trash"></i>Save
+                        </button>
+                    </div>
+                </td>
+                
+                <td>
+                    <button type="submit" className="btn btn-secondary" onClick={this.handleCancel}>
+                        <i className="fa fa-btn fa-de"></i>Cancle
                     </button>
-        </div>;
-        if (this.state.edit) {
-            taskElement = <div>
-                <input value={this.state.name} onChange={this.handleChange} />
-                <button onClick={this.handleSave}>
-                    Save
-                    </button>
-                <button onClick={this.handleCancel}>
-                    Cancel
-                    </button>
-            </div>;
+                </td>
+            </tr>;
         }
+        
+        // <div>
+        //     <span>{this.props.task.name}</span>
+        //     <button onClick={this.handleEdit}>
+        //         Edit
+        //             </button>
+        //     <button onClick={this.handleDelete}>
+        //         Delete
+        //             </button>
+        // </div>;
+
+        // if (this.state.edit) {
+        //     taskElement = <div>
+        //         <input value={this.state.name} onChange={this.handleChange} />
+        //         <button onClick={this.handleSave} ref={this.setSaveButtonRef}>
+        //             Save
+        //             </button>
+        //         <button onClick={this.handleCancel}>
+        //             Cancel
+        //             </button>
+        //     </div>;
+        // }
+
         return (
-            <div>{taskElement}
-            </div>
+            <tbody>
+                {taskElement}
+            </tbody>
 
         );
     }

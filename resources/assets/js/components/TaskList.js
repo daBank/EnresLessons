@@ -16,7 +16,19 @@ export class TaskList extends Component {
         // console.log("Tasklist"+ this.props.tasks);
         return (
             <div className="panel-body">
-                {taskItems}
+                <table className="table table-striped task-table">
+
+                    <thead>
+                        <tr>
+                            <th>Task</th>
+                            <th>&nbsp;</th>
+                            <th>&nbsp;</th>
+                        </tr>
+                    </thead>
+
+                    
+                    {taskItems}
+                </table>
             </div>
         );
     }

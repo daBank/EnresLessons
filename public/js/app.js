@@ -65642,6 +65642,479 @@ module.exports = function(module) {
 
 /***/ }),
 
+/***/ "./node_modules/whatwg-fetch/fetch.js":
+/***/ (function(module, exports) {
+
+(function(self) {
+  'use strict';
+
+  if (self.fetch) {
+    return
+  }
+
+  var support = {
+    searchParams: 'URLSearchParams' in self,
+    iterable: 'Symbol' in self && 'iterator' in Symbol,
+    blob: 'FileReader' in self && 'Blob' in self && (function() {
+      try {
+        new Blob()
+        return true
+      } catch(e) {
+        return false
+      }
+    })(),
+    formData: 'FormData' in self,
+    arrayBuffer: 'ArrayBuffer' in self
+  }
+
+  if (support.arrayBuffer) {
+    var viewClasses = [
+      '[object Int8Array]',
+      '[object Uint8Array]',
+      '[object Uint8ClampedArray]',
+      '[object Int16Array]',
+      '[object Uint16Array]',
+      '[object Int32Array]',
+      '[object Uint32Array]',
+      '[object Float32Array]',
+      '[object Float64Array]'
+    ]
+
+    var isDataView = function(obj) {
+      return obj && DataView.prototype.isPrototypeOf(obj)
+    }
+
+    var isArrayBufferView = ArrayBuffer.isView || function(obj) {
+      return obj && viewClasses.indexOf(Object.prototype.toString.call(obj)) > -1
+    }
+  }
+
+  function normalizeName(name) {
+    if (typeof name !== 'string') {
+      name = String(name)
+    }
+    if (/[^a-z0-9\-#$%&'*+.\^_`|~]/i.test(name)) {
+      throw new TypeError('Invalid character in header field name')
+    }
+    return name.toLowerCase()
+  }
+
+  function normalizeValue(value) {
+    if (typeof value !== 'string') {
+      value = String(value)
+    }
+    return value
+  }
+
+  // Build a destructive iterator for the value list
+  function iteratorFor(items) {
+    var iterator = {
+      next: function() {
+        var value = items.shift()
+        return {done: value === undefined, value: value}
+      }
+    }
+
+    if (support.iterable) {
+      iterator[Symbol.iterator] = function() {
+        return iterator
+      }
+    }
+
+    return iterator
+  }
+
+  function Headers(headers) {
+    this.map = {}
+
+    if (headers instanceof Headers) {
+      headers.forEach(function(value, name) {
+        this.append(name, value)
+      }, this)
+    } else if (Array.isArray(headers)) {
+      headers.forEach(function(header) {
+        this.append(header[0], header[1])
+      }, this)
+    } else if (headers) {
+      Object.getOwnPropertyNames(headers).forEach(function(name) {
+        this.append(name, headers[name])
+      }, this)
+    }
+  }
+
+  Headers.prototype.append = function(name, value) {
+    name = normalizeName(name)
+    value = normalizeValue(value)
+    var oldValue = this.map[name]
+    this.map[name] = oldValue ? oldValue+','+value : value
+  }
+
+  Headers.prototype['delete'] = function(name) {
+    delete this.map[normalizeName(name)]
+  }
+
+  Headers.prototype.get = function(name) {
+    name = normalizeName(name)
+    return this.has(name) ? this.map[name] : null
+  }
+
+  Headers.prototype.has = function(name) {
+    return this.map.hasOwnProperty(normalizeName(name))
+  }
+
+  Headers.prototype.set = function(name, value) {
+    this.map[normalizeName(name)] = normalizeValue(value)
+  }
+
+  Headers.prototype.forEach = function(callback, thisArg) {
+    for (var name in this.map) {
+      if (this.map.hasOwnProperty(name)) {
+        callback.call(thisArg, this.map[name], name, this)
+      }
+    }
+  }
+
+  Headers.prototype.keys = function() {
+    var items = []
+    this.forEach(function(value, name) { items.push(name) })
+    return iteratorFor(items)
+  }
+
+  Headers.prototype.values = function() {
+    var items = []
+    this.forEach(function(value) { items.push(value) })
+    return iteratorFor(items)
+  }
+
+  Headers.prototype.entries = function() {
+    var items = []
+    this.forEach(function(value, name) { items.push([name, value]) })
+    return iteratorFor(items)
+  }
+
+  if (support.iterable) {
+    Headers.prototype[Symbol.iterator] = Headers.prototype.entries
+  }
+
+  function consumed(body) {
+    if (body.bodyUsed) {
+      return Promise.reject(new TypeError('Already read'))
+    }
+    body.bodyUsed = true
+  }
+
+  function fileReaderReady(reader) {
+    return new Promise(function(resolve, reject) {
+      reader.onload = function() {
+        resolve(reader.result)
+      }
+      reader.onerror = function() {
+        reject(reader.error)
+      }
+    })
+  }
+
+  function readBlobAsArrayBuffer(blob) {
+    var reader = new FileReader()
+    var promise = fileReaderReady(reader)
+    reader.readAsArrayBuffer(blob)
+    return promise
+  }
+
+  function readBlobAsText(blob) {
+    var reader = new FileReader()
+    var promise = fileReaderReady(reader)
+    reader.readAsText(blob)
+    return promise
+  }
+
+  function readArrayBufferAsText(buf) {
+    var view = new Uint8Array(buf)
+    var chars = new Array(view.length)
+
+    for (var i = 0; i < view.length; i++) {
+      chars[i] = String.fromCharCode(view[i])
+    }
+    return chars.join('')
+  }
+
+  function bufferClone(buf) {
+    if (buf.slice) {
+      return buf.slice(0)
+    } else {
+      var view = new Uint8Array(buf.byteLength)
+      view.set(new Uint8Array(buf))
+      return view.buffer
+    }
+  }
+
+  function Body() {
+    this.bodyUsed = false
+
+    this._initBody = function(body) {
+      this._bodyInit = body
+      if (!body) {
+        this._bodyText = ''
+      } else if (typeof body === 'string') {
+        this._bodyText = body
+      } else if (support.blob && Blob.prototype.isPrototypeOf(body)) {
+        this._bodyBlob = body
+      } else if (support.formData && FormData.prototype.isPrototypeOf(body)) {
+        this._bodyFormData = body
+      } else if (support.searchParams && URLSearchParams.prototype.isPrototypeOf(body)) {
+        this._bodyText = body.toString()
+      } else if (support.arrayBuffer && support.blob && isDataView(body)) {
+        this._bodyArrayBuffer = bufferClone(body.buffer)
+        // IE 10-11 can't handle a DataView body.
+        this._bodyInit = new Blob([this._bodyArrayBuffer])
+      } else if (support.arrayBuffer && (ArrayBuffer.prototype.isPrototypeOf(body) || isArrayBufferView(body))) {
+        this._bodyArrayBuffer = bufferClone(body)
+      } else {
+        throw new Error('unsupported BodyInit type')
+      }
+
+      if (!this.headers.get('content-type')) {
+        if (typeof body === 'string') {
+          this.headers.set('content-type', 'text/plain;charset=UTF-8')
+        } else if (this._bodyBlob && this._bodyBlob.type) {
+          this.headers.set('content-type', this._bodyBlob.type)
+        } else if (support.searchParams && URLSearchParams.prototype.isPrototypeOf(body)) {
+          this.headers.set('content-type', 'application/x-www-form-urlencoded;charset=UTF-8')
+        }
+      }
+    }
+
+    if (support.blob) {
+      this.blob = function() {
+        var rejected = consumed(this)
+        if (rejected) {
+          return rejected
+        }
+
+        if (this._bodyBlob) {
+          return Promise.resolve(this._bodyBlob)
+        } else if (this._bodyArrayBuffer) {
+          return Promise.resolve(new Blob([this._bodyArrayBuffer]))
+        } else if (this._bodyFormData) {
+          throw new Error('could not read FormData body as blob')
+        } else {
+          return Promise.resolve(new Blob([this._bodyText]))
+        }
+      }
+
+      this.arrayBuffer = function() {
+        if (this._bodyArrayBuffer) {
+          return consumed(this) || Promise.resolve(this._bodyArrayBuffer)
+        } else {
+          return this.blob().then(readBlobAsArrayBuffer)
+        }
+      }
+    }
+
+    this.text = function() {
+      var rejected = consumed(this)
+      if (rejected) {
+        return rejected
+      }
+
+      if (this._bodyBlob) {
+        return readBlobAsText(this._bodyBlob)
+      } else if (this._bodyArrayBuffer) {
+        return Promise.resolve(readArrayBufferAsText(this._bodyArrayBuffer))
+      } else if (this._bodyFormData) {
+        throw new Error('could not read FormData body as text')
+      } else {
+        return Promise.resolve(this._bodyText)
+      }
+    }
+
+    if (support.formData) {
+      this.formData = function() {
+        return this.text().then(decode)
+      }
+    }
+
+    this.json = function() {
+      return this.text().then(JSON.parse)
+    }
+
+    return this
+  }
+
+  // HTTP methods whose capitalization should be normalized
+  var methods = ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT']
+
+  function normalizeMethod(method) {
+    var upcased = method.toUpperCase()
+    return (methods.indexOf(upcased) > -1) ? upcased : method
+  }
+
+  function Request(input, options) {
+    options = options || {}
+    var body = options.body
+
+    if (input instanceof Request) {
+      if (input.bodyUsed) {
+        throw new TypeError('Already read')
+      }
+      this.url = input.url
+      this.credentials = input.credentials
+      if (!options.headers) {
+        this.headers = new Headers(input.headers)
+      }
+      this.method = input.method
+      this.mode = input.mode
+      if (!body && input._bodyInit != null) {
+        body = input._bodyInit
+        input.bodyUsed = true
+      }
+    } else {
+      this.url = String(input)
+    }
+
+    this.credentials = options.credentials || this.credentials || 'omit'
+    if (options.headers || !this.headers) {
+      this.headers = new Headers(options.headers)
+    }
+    this.method = normalizeMethod(options.method || this.method || 'GET')
+    this.mode = options.mode || this.mode || null
+    this.referrer = null
+
+    if ((this.method === 'GET' || this.method === 'HEAD') && body) {
+      throw new TypeError('Body not allowed for GET or HEAD requests')
+    }
+    this._initBody(body)
+  }
+
+  Request.prototype.clone = function() {
+    return new Request(this, { body: this._bodyInit })
+  }
+
+  function decode(body) {
+    var form = new FormData()
+    body.trim().split('&').forEach(function(bytes) {
+      if (bytes) {
+        var split = bytes.split('=')
+        var name = split.shift().replace(/\+/g, ' ')
+        var value = split.join('=').replace(/\+/g, ' ')
+        form.append(decodeURIComponent(name), decodeURIComponent(value))
+      }
+    })
+    return form
+  }
+
+  function parseHeaders(rawHeaders) {
+    var headers = new Headers()
+    // Replace instances of \r\n and \n followed by at least one space or horizontal tab with a space
+    // https://tools.ietf.org/html/rfc7230#section-3.2
+    var preProcessedHeaders = rawHeaders.replace(/\r?\n[\t ]+/g, ' ')
+    preProcessedHeaders.split(/\r?\n/).forEach(function(line) {
+      var parts = line.split(':')
+      var key = parts.shift().trim()
+      if (key) {
+        var value = parts.join(':').trim()
+        headers.append(key, value)
+      }
+    })
+    return headers
+  }
+
+  Body.call(Request.prototype)
+
+  function Response(bodyInit, options) {
+    if (!options) {
+      options = {}
+    }
+
+    this.type = 'default'
+    this.status = options.status === undefined ? 200 : options.status
+    this.ok = this.status >= 200 && this.status < 300
+    this.statusText = 'statusText' in options ? options.statusText : 'OK'
+    this.headers = new Headers(options.headers)
+    this.url = options.url || ''
+    this._initBody(bodyInit)
+  }
+
+  Body.call(Response.prototype)
+
+  Response.prototype.clone = function() {
+    return new Response(this._bodyInit, {
+      status: this.status,
+      statusText: this.statusText,
+      headers: new Headers(this.headers),
+      url: this.url
+    })
+  }
+
+  Response.error = function() {
+    var response = new Response(null, {status: 0, statusText: ''})
+    response.type = 'error'
+    return response
+  }
+
+  var redirectStatuses = [301, 302, 303, 307, 308]
+
+  Response.redirect = function(url, status) {
+    if (redirectStatuses.indexOf(status) === -1) {
+      throw new RangeError('Invalid status code')
+    }
+
+    return new Response(null, {status: status, headers: {location: url}})
+  }
+
+  self.Headers = Headers
+  self.Request = Request
+  self.Response = Response
+
+  self.fetch = function(input, init) {
+    return new Promise(function(resolve, reject) {
+      var request = new Request(input, init)
+      var xhr = new XMLHttpRequest()
+
+      xhr.onload = function() {
+        var options = {
+          status: xhr.status,
+          statusText: xhr.statusText,
+          headers: parseHeaders(xhr.getAllResponseHeaders() || '')
+        }
+        options.url = 'responseURL' in xhr ? xhr.responseURL : options.headers.get('X-Request-URL')
+        var body = 'response' in xhr ? xhr.response : xhr.responseText
+        resolve(new Response(body, options))
+      }
+
+      xhr.onerror = function() {
+        reject(new TypeError('Network request failed'))
+      }
+
+      xhr.ontimeout = function() {
+        reject(new TypeError('Network request failed'))
+      }
+
+      xhr.open(request.method, request.url, true)
+
+      if (request.credentials === 'include') {
+        xhr.withCredentials = true
+      } else if (request.credentials === 'omit') {
+        xhr.withCredentials = false
+      }
+
+      if ('responseType' in xhr && support.blob) {
+        xhr.responseType = 'blob'
+      }
+
+      request.headers.forEach(function(value, name) {
+        xhr.setRequestHeader(name, value)
+      })
+
+      xhr.send(typeof request._bodyInit === 'undefined' ? null : request._bodyInit)
+    })
+  }
+  self.fetch.polyfill = true
+})(typeof self !== 'undefined' ? self : this);
+
+
+/***/ }),
+
 /***/ "./resources/assets/js/AppDispatcher.js":
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
@@ -65711,19 +66184,117 @@ var AppDispatcher = function (_Dispatcher) {
 "use strict";
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__AppDispatcher__ = __webpack_require__("./resources/assets/js/AppDispatcher.js");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__constants__ = __webpack_require__("./resources/assets/js/constants.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__api_TaskAPI__ = __webpack_require__("./resources/assets/js/api/TaskAPI.js");
+
 
 
 
 var TaskActionCreators = {
   addTask: function addTask(name) {
-    __WEBPACK_IMPORTED_MODULE_0__AppDispatcher__["a" /* default */].dispatch({
-      type: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].ADD_TASK,
-      payload: { name: name }
+    var d = new Date();
+    var newId = d.toISOString();
+    __WEBPACK_IMPORTED_MODULE_0__AppDispatcher__["a" /* default */].dispatchAsync(__WEBPACK_IMPORTED_MODULE_2__api_TaskAPI__["a" /* default */].addTask(name), {
+      request: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].ADD_TASK,
+      success: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].ADD_TASK_SUCCESS,
+      failure: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].ADD_TASK_ERROR
+    }, { name: name, id: newId });
+  },
+  deleteTask: function deleteTask(id) {
+    console.log("555" + id);
+    __WEBPACK_IMPORTED_MODULE_0__AppDispatcher__["a" /* default */].dispatchAsync(__WEBPACK_IMPORTED_MODULE_2__api_TaskAPI__["a" /* default */].deleteTask(id), {
+      request: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].DELETE_TASK,
+      success: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].DELETE_TASK_SUCCESS,
+      failure: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].DELETE_TASK_ERROR
+    }, { id: id });
+  },
+  editTask: function editTask(id, newName) {
+    __WEBPACK_IMPORTED_MODULE_0__AppDispatcher__["a" /* default */].dispatchAsync(__WEBPACK_IMPORTED_MODULE_2__api_TaskAPI__["a" /* default */].editTask(id, newName), {
+      request: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].EDIT_TASK,
+      success: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].EDIT_TASK_SUCCESS,
+      failure: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].EDIT_TASK_ERROR
+    }, { id: id, name: newName });
+  },
+  fetchTasks: function fetchTasks() {
+    __WEBPACK_IMPORTED_MODULE_0__AppDispatcher__["a" /* default */].dispatchAsync(__WEBPACK_IMPORTED_MODULE_2__api_TaskAPI__["a" /* default */].fetchTasks(), {
+      request: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].FETCH_TASKS,
+      success: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].FETCH_TASKS_SUCCESS,
+      failure: __WEBPACK_IMPORTED_MODULE_1__constants__["a" /* default */].FETCH_TASKS_ERROR
     });
   }
 };
 
 /* harmony default export */ __webpack_exports__["a"] = (TaskActionCreators);
+
+/***/ }),
+
+/***/ "./resources/assets/js/api/TaskAPI.js":
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_whatwg_fetch__ = __webpack_require__("./node_modules/whatwg-fetch/fetch.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_whatwg_fetch___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0_whatwg_fetch__);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_babel_polyfill__ = __webpack_require__("./node_modules/babel-polyfill/lib/index.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_babel_polyfill___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1_babel_polyfill__);
+
+
+
+var API_URL = '/api';
+var API_HEADERS = {
+  'Content-Type': 'application/json',
+  'X-CSRF-TOKEN': window.Laravel.csrfToken,
+  'Authorization': 'Bearer ' + window.Laravel.apiToken
+};
+
+var TaskAPI = {
+  fetchTasks: function fetchTasks() {
+    return fetch(API_URL + '/tasks', {
+      credentials: 'same-origin',
+      headers: API_HEADERS
+    }).then(function (response) {
+      return response.json();
+    });
+  },
+  addTask: function addTask(name) {
+    return fetch(API_URL + '/tasks', {
+      method: 'post',
+      credentials: 'same-origin',
+      headers: API_HEADERS,
+      body: JSON.stringify({ name: name })
+    }).then(function (response) {
+      return response.json();
+    });
+  },
+  deleteTask: function deleteTask(id) {
+    console.log("api deleteing" + id);
+    return fetch(API_URL + '/tasks/' + id, {
+      method: 'delete',
+      credentials: 'same-origin',
+      headers: API_HEADERS,
+      body: JSON.stringify({ id: id })
+    }).then(function (response) {
+      return response.json();
+    });
+  },
+  editTask: function editTask(id, newName) {
+    return fetch(API_URL + '/tasks/' + id, {
+      method: 'put',
+      credentials: 'same-origin',
+      headers: API_HEADERS,
+      body: JSON.stringify({ name: newName })
+    }).then(function (response) {
+      return response.json();
+    });
+  },
+  updateUserPassword: function updateUserPassword(user, draftUser) {
+    return fetch(API_URL + '/user_password/' + user.id, {
+      method: 'put',
+      credentials: 'same-origin',
+      headers: API_HEADERS,
+      body: JSON.stringify(draftUser)
+    });
+  }
+};
+/* harmony default export */ __webpack_exports__["a"] = (TaskAPI);
 
 /***/ }),
 
@@ -65839,7 +66410,9 @@ if (document.getElementById("example")) {
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "a", function() { return NewTaskForm; });
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_react__ = __webpack_require__("./node_modules/react/index.js");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_react___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0_react__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__actions_TaskActionCreators__ = __webpack_require__("./resources/assets/js/actions/TaskActionCreators.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_react_dom__ = __webpack_require__("./node_modules/react-dom/index.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_react_dom___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1_react_dom__);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__actions_TaskActionCreators__ = __webpack_require__("./resources/assets/js/actions/TaskActionCreators.js");
 var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
 
 function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
@@ -65847,6 +66420,8 @@ function _classCallCheck(instance, Constructor) { if (!(instance instanceof Cons
 function _possibleConstructorReturn(self, call) { if (!self) { throw new ReferenceError("this hasn't been initialised - super() hasn't been called"); } return call && (typeof call === "object" || typeof call === "function") ? call : self; }
 
 function _inherits(subClass, superClass) { if (typeof superClass !== "function" && superClass !== null) { throw new TypeError("Super expression must either be null or a function, not " + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass; }
+
+
 
 
 
@@ -65861,8 +66436,21 @@ var NewTaskForm = function (_Component) {
 
         _this.state = { name: "bank" };
 
+        _this.addButton = null;
+        _this.setAddButtonRef = function (element) {
+            _this.addButton = element;
+        };
+        _this.toggleButton = function () {
+            // disabledButton using the raw DOM API
+            console.log("Tetsetset");
+            if (_this.addButton) {
+                _this.addButton.disabled = !_this.addButton.disabled;
+            }
+        };
+
+        _this.handleAdd = _this.handleAdd.bind(_this);
         _this.handleChange = _this.handleChange.bind(_this);
-        _this.handleSubmit = _this.handleSubmit.bind(_this);
+        // this.handleSubmit = this.handleSubmit.bind(this);
         return _this;
     }
 
@@ -65870,14 +66458,26 @@ var NewTaskForm = function (_Component) {
         key: 'handleChange',
         value: function handleChange(event) {
             this.setState({ name: event.target.value });
+            console.log("hc");
+            console.log(this.refs);
+
+            if (event.target.value == "") {
+                console.log("in space");
+                this.toggleButton();
+            } else {
+                if (this.addButton.disabled) this.toggleButton();
+            }
         }
     }, {
-        key: 'handleSubmit',
-        value: function handleSubmit(event) {
+        key: 'handleAdd',
+        value: function handleAdd(e) {
+            e.preventDefault();
 
-            event.preventDefault();
-            __WEBPACK_IMPORTED_MODULE_1__actions_TaskActionCreators__["a" /* default */].addTask(this.state.name);
+            console.log("ntf");
+            console.log(this.props.onAdd);
+            this.props.onAdd(this.state.name);
             this.setState({ name: "" });
+            this.handleChange(e);
         }
     }, {
         key: 'render',
@@ -65911,7 +66511,7 @@ var NewTaskForm = function (_Component) {
                             { className: 'col-sm-offset-3 col-sm-6' },
                             __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
                                 'button',
-                                { type: 'submit', className: 'btn btn-default btn-sm' },
+                                { className: 'btn btn-default btn-sm', onClick: this.handleAdd, ref: this.setAddButtonRef },
                                 __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement('span', { className: 'glyphicon glyphicon-plus-sign' }),
                                 ' Add Task'
                             )
@@ -66011,8 +66611,8 @@ var PanelCreateTask = function (_Component) {
         key: 'render',
         value: function render() {
             var header = __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(__WEBPACK_IMPORTED_MODULE_1__PanelHeading__["a" /* PanelHeading */], { message: 'New Task' });
-            var body = __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(__WEBPACK_IMPORTED_MODULE_2__NewTaskForm__["a" /* NewTaskForm */], null);
-
+            var body = __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(__WEBPACK_IMPORTED_MODULE_2__NewTaskForm__["a" /* NewTaskForm */], { onAdd: this.props.onAdd });
+            // console.log(this.props.onAdd);
             return __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(__WEBPACK_IMPORTED_MODULE_3__Panel__["a" /* Panel */], { header: header, body: body });
         }
     }]);
@@ -66144,6 +66744,18 @@ var Task = function (_Component) {
 
         _this.state = { name: "", edit: false };
 
+        _this.saveButton = null;
+        _this.setSaveButtonRef = function (element) {
+            _this.saveButton = element;
+        };
+        _this.toggleButton = function () {
+            // disabledButton using the raw DOM API
+            console.log("Tetsetset");
+            if (_this.saveButton) {
+                _this.saveButton.disabled = !_this.saveButton.disabled;
+            }
+        };
+
         _this.handleChange = _this.handleChange.bind(_this);
         _this.handleDelete = _this.handleDelete.bind(_this);
         _this.handleEdit = _this.handleEdit.bind(_this);
@@ -66156,14 +66768,15 @@ var Task = function (_Component) {
         key: "handleChange",
         value: function handleChange(event) {
             this.setState(_extends({}, this.state, { name: event.target.value }));
+            if (event.target.value == "") {
+                this.toggleButton();
+            } else {
+                if (this.saveButton.disabled) this.toggleButton();
+            }
         }
     }, {
         key: "handleDelete",
         value: function handleDelete() {
-            console.log("t delete id: " + this.props.task.id);
-            // TO DELETE
-            console.log(this.props.handleDelete);
-            // event.preventDefault();
             this.props.handleDelete(this.props.task.id);
         }
     }, {
@@ -66191,44 +66804,108 @@ var Task = function (_Component) {
     }, {
         key: "render",
         value: function render() {
+
             var taskElement = __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
-                "div",
+                "tr",
                 null,
                 __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
-                    "span",
-                    null,
-                    this.props.task.name
+                    "td",
+                    { className: "table-text" },
+                    __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                        "div",
+                        { id: "name-task-id" },
+                        this.props.task.id,
+                        ":",
+                        this.props.task.name
+                    )
                 ),
                 __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
-                    "button",
-                    { onClick: this.handleEdit },
-                    "Edit"
+                    "td",
+                    { className: "table-text" },
+                    __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                        "button",
+                        { type: "button", id: "edit-task-id", className: "btn btn-warning", onClick: this.handleEdit },
+                        __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement("i", { className: "fa fa-btn fa-trash" }),
+                        "Edit"
+                    )
                 ),
                 __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
-                    "button",
-                    { onClick: this.handleDelete },
-                    "Delete"
+                    "td",
+                    { className: "table-text" },
+                    __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                        "button",
+                        { id: "delete-task-id", className: "btn btn-danger", onClick: this.handleDelete },
+                        __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement("i", { className: "fa fa-btn fa-trash" }),
+                        "Delete"
+                    )
                 )
             );
+
             if (this.state.edit) {
                 taskElement = __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
-                    "div",
+                    "tr",
                     null,
-                    __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement("input", { value: this.state.name, onChange: this.handleChange }),
                     __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
-                        "button",
-                        { onClick: this.handleSave },
-                        "Save"
+                        "td",
+                        { className: "table-text" },
+                        __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                            "div",
+                            { className: "col-sm-12 hidden-xs hidden-sm", id: "input-task-id" },
+                            __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement("input", { name: "name", type: "text", className: "form-control",
+                                value: this.state.name, onChange: this.handleChange, "aria-label": "Task Name", "aria-describedby": "basic-addon2" })
+                        )
                     ),
                     __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
-                        "button",
-                        { onClick: this.handleCancel },
-                        "Cancel"
+                        "td",
+                        null,
+                        __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                            "div",
+                            { className: "hidden-xs hidden-sm", id: "save-task-id" },
+                            __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                                "button",
+                                { type: "submit", className: "btn btn-info", onClick: this.handleSave, ref: this.setSaveButtonRef },
+                                __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement("i", { className: "fa fa-btn fa-trash" }),
+                                "Save"
+                            )
+                        )
+                    ),
+                    __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                        "td",
+                        null,
+                        __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                            "button",
+                            { type: "submit", className: "btn btn-secondary", onClick: this.handleCancel },
+                            __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement("i", { className: "fa fa-btn fa-de" }),
+                            "Cancle"
+                        )
                     )
                 );
             }
+
+            // <div>
+            //     <span>{this.props.task.name}</span>
+            //     <button onClick={this.handleEdit}>
+            //         Edit
+            //             </button>
+            //     <button onClick={this.handleDelete}>
+            //         Delete
+            //             </button>
+            // </div>;
+
+            // if (this.state.edit) {
+            //     taskElement = <div>
+            //         <input value={this.state.name} onChange={this.handleChange} />
+            //         <button onClick={this.handleSave} ref={this.setSaveButtonRef}>
+            //             Save
+            //             </button>
+            //         <button onClick={this.handleCancel}>
+            //             Cancel
+            //             </button>
+            //     </div>;
+            // }
+
             return __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
-                "div",
+                "tbody",
                 null,
                 taskElement
             );
@@ -66250,15 +66927,15 @@ var Task = function (_Component) {
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_react_dom___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1_react_dom__);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__PanelCreateTask__ = __webpack_require__("./resources/assets/js/components/PanelCreateTask.js");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__PanelCurrentTasks__ = __webpack_require__("./resources/assets/js/components/PanelCurrentTasks.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__actions_TaskActionCreators__ = __webpack_require__("./resources/assets/js/actions/TaskActionCreators.js");
 var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
-
-function _toConsumableArray(arr) { if (Array.isArray(arr)) { for (var i = 0, arr2 = Array(arr.length); i < arr.length; i++) { arr2[i] = arr[i]; } return arr2; } else { return Array.from(arr); } }
 
 function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
 
 function _possibleConstructorReturn(self, call) { if (!self) { throw new ReferenceError("this hasn't been initialised - super() hasn't been called"); } return call && (typeof call === "object" || typeof call === "function") ? call : self; }
 
 function _inherits(subClass, superClass) { if (typeof superClass !== "function" && superClass !== null) { throw new TypeError("Super expression must either be null or a function, not " + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass; }
+
 
 
 
@@ -66275,41 +66952,39 @@ var TaskApp = function (_Component) {
     var _this = _possibleConstructorReturn(this, (TaskApp.__proto__ || Object.getPrototypeOf(TaskApp)).call(this, props));
 
     _this.state = {
-      tasks: _this.props.tasks
+      tasks: _this.props.tasks,
+      maxId: 1
     };
 
+    _this.handleAdd = _this.handleAdd.bind(_this);
     _this.handleDelete = _this.handleDelete.bind(_this);
     _this.handleSave = _this.handleSave.bind(_this);
     return _this;
   }
 
   _createClass(TaskApp, [{
+    key: "handleAdd",
+    value: function handleAdd(name) {
+      console.log('ta');
+      console.log(name);
+      //let newTask = { id: this.state.maxId + 1, name };
+      /* let tasks = this.state.tasks;
+       let tasks = [...this.state.tasks];
+       tasks.push(newTask); */
+      //let tasks = [...this.state.tasks, newTask];
+      //this.setState({ tasks: tasks, maxId:newTask.id });
+
+      __WEBPACK_IMPORTED_MODULE_4__actions_TaskActionCreators__["a" /* default */].addTask(name);
+    }
+  }, {
     key: "handleDelete",
     value: function handleDelete(id) {
-      // console.log("id"+id+ "ex de" +this.findIdIndex(id));
-      var tasks = [].concat(_toConsumableArray(this.state.tasks));
-      tasks.splice(this.findIdIndex(id), 1);
-
-      this.setState({ tasks: tasks });
+      __WEBPACK_IMPORTED_MODULE_4__actions_TaskActionCreators__["a" /* default */].deleteTask(id);
     }
   }, {
     key: "handleSave",
     value: function handleSave(id, newName) {
-      var tasks = [].concat(_toConsumableArray(this.state.tasks));
-      var index = this.findIdIndex(id);
-      tasks[index].name = newName;
-
-      this.setState({ tasks: tasks });
-    }
-  }, {
-    key: "findIdIndex",
-    value: function findIdIndex(id) {
-      // return tasks.findIndex(function (task){
-      //     return task.id == id;
-      // });
-      return this.state.tasks.findIndex(function (task) {
-        return task.id == id;
-      });
+      __WEBPACK_IMPORTED_MODULE_4__actions_TaskActionCreators__["a" /* default */].editTask(id, newName);
     }
   }, {
     key: "render",
@@ -66320,7 +66995,7 @@ var TaskApp = function (_Component) {
         __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
           "div",
           { className: "row justify-content-center" },
-          __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(__WEBPACK_IMPORTED_MODULE_2__PanelCreateTask__["a" /* PanelCreateTask */], null),
+          __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(__WEBPACK_IMPORTED_MODULE_2__PanelCreateTask__["a" /* PanelCreateTask */], { onAdd: this.handleAdd }),
           __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(__WEBPACK_IMPORTED_MODULE_3__PanelCurrentTasks__["a" /* PanelCurrentTasks */], {
             tasks: this.props.tasks,
             handleDelete: this.handleDelete,
@@ -66348,6 +67023,7 @@ var TaskApp = function (_Component) {
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_flux_utils___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1_flux_utils__);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__TaskApp__ = __webpack_require__("./resources/assets/js/components/TaskApp.js");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__stores_TaskStore__ = __webpack_require__("./resources/assets/js/stores/TaskStore.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__actions_TaskActionCreators__ = __webpack_require__("./resources/assets/js/actions/TaskActionCreators.js");
 var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
 
 function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
@@ -66355,6 +67031,7 @@ function _classCallCheck(instance, Constructor) { if (!(instance instanceof Cons
 function _possibleConstructorReturn(self, call) { if (!self) { throw new ReferenceError("this hasn't been initialised - super() hasn't been called"); } return call && (typeof call === "object" || typeof call === "function") ? call : self; }
 
 function _inherits(subClass, superClass) { if (typeof superClass !== "function" && superClass !== null) { throw new TypeError("Super expression must either be null or a function, not " + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass; }
+
 
 
 
@@ -66372,10 +67049,13 @@ var TaskAppContainer = function (_Component) {
 
   _createClass(TaskAppContainer, [{
     key: 'componentDidMount',
-    value: function componentDidMount() {}
+    value: function componentDidMount() {
+      __WEBPACK_IMPORTED_MODULE_4__actions_TaskActionCreators__["a" /* default */].fetchTasks();
+    }
   }, {
     key: 'render',
     value: function render() {
+
       return __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(__WEBPACK_IMPORTED_MODULE_2__TaskApp__["a" /* default */], { tasks: this.state.tasks
       });
     }
@@ -66442,7 +67122,34 @@ var TaskList = function (_Component) {
             return __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
                 'div',
                 { className: 'panel-body' },
-                taskItems
+                __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                    'table',
+                    { className: 'table table-striped task-table' },
+                    __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                        'thead',
+                        null,
+                        __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                            'tr',
+                            null,
+                            __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                                'th',
+                                null,
+                                'Task'
+                            ),
+                            __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                                'th',
+                                null,
+                                '\xA0'
+                            ),
+                            __WEBPACK_IMPORTED_MODULE_0_react___default.a.createElement(
+                                'th',
+                                null,
+                                '\xA0'
+                            )
+                        )
+                    ),
+                    taskItems
+                )
             );
         }
     }]);
@@ -66457,7 +67164,21 @@ var TaskList = function (_Component) {
 
 "use strict";
 /* harmony default export */ __webpack_exports__["a"] = ({
-    ADD_TASK: 'ADD_TASK'
+    ADD_TASK: 'ADD_TASK',
+    ADD_TASK_SUCCESS: 'ADD_TASK_SUCCESS',
+    ADD_TASK_ERROR: 'ADD_TASK_ERROR',
+
+    DELETE_TASK: 'DELETE_TASK',
+    DELETE_TASK_SUCCESS: 'DELETE_TASK_SUCCESS',
+    DELETE_TASK_ERROR: 'DELETE_TASK_ERROR',
+
+    EDIT_TASK: 'EDIT_TASK',
+    EDIT_TASK_SUCCESS: 'EDIT_TASK_SUCCESS',
+    EDIT_TASK_ERROR: 'EDIT_TASK_ERROR',
+
+    FETCH_TASKS: "FETCH_TASKS",
+    FETCH_TASKS_SUCCESS: "FETCH_TASKS_SUCCESS",
+    FETCH_TASKS_ERROR: "FETCH_TASKS_ERROR"
 });
 
 /***/ }),
@@ -66474,6 +67195,8 @@ var TaskList = function (_Component) {
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_3_babel_polyfill__ = __webpack_require__("./node_modules/babel-polyfill/lib/index.js");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_3_babel_polyfill___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_3_babel_polyfill__);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__constants__ = __webpack_require__("./resources/assets/js/constants.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_5_lodash__ = __webpack_require__("./node_modules/lodash/lodash.js");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_5_lodash___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_5_lodash__);
 var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
 
 function _toConsumableArray(arr) { if (Array.isArray(arr)) { for (var i = 0, arr2 = Array(arr.length); i < arr.length; i++) { arr2[i] = arr[i]; } return arr2; } else { return Array.from(arr); } }
@@ -66483,6 +67206,7 @@ function _classCallCheck(instance, Constructor) { if (!(instance instanceof Cons
 function _possibleConstructorReturn(self, call) { if (!self) { throw new ReferenceError("this hasn't been initialised - super() hasn't been called"); } return call && (typeof call === "object" || typeof call === "function") ? call : self; }
 
 function _inherits(subClass, superClass) { if (typeof superClass !== "function" && superClass !== null) { throw new TypeError("Super expression must either be null or a function, not " + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass; }
+
 
 
 
@@ -66502,6 +67226,13 @@ var TaskStore = function (_ReduceStore) {
     _createClass(TaskStore, [{
         key: 'getInitialState',
         value: function getInitialState() {
+            var _modifiedTasks = {};
+            this.setModifiedTasks = function (tasks) {
+                _modifiedTasks = tasks;
+            };
+            this.getModifiedTasks = function () {
+                return _modifiedTasks;
+            };
             return {
                 tasks: [{ id: 1, name: "hello" }, { id: 2, name: "world" }, { id: 3, name: "test123" }],
                 maxId: 3
@@ -66518,21 +67249,133 @@ var TaskStore = function (_ReduceStore) {
             return this._state.maxId;
         }
     }, {
+        key: 'findIdIndex',
+        value: function findIdIndex(id) {
+            // return tasks.findIndex(function (task){
+            //     return task.id == id;
+            // });
+            // let tasks = [...this._state.tasks];
+            return this.getTasks().findIndex(function (task) {
+                return task.id == id;
+            });
+        }
+    }, {
         key: 'reduce',
         value: function reduce(state, action) {
+            var maxId = this._state.maxId;
+            var tasks = [].concat(_toConsumableArray(this._state.tasks));
+            //let _modifiedTasks=[...this._state.tasks]; /// ???? cannot add this to DELETE_TASK scope, it will be null/undifined when return.
+            var index = void 0;
+
+            console.log("reduce");
+            console.log(this.getModifiedTasks());
             switch (action.type) {
                 case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].ADD_TASK:
+                    console.log("ADD_TASK");
                     console.log(action.payload);
-                    var maxId = this._state.maxId + 1;
-                    var newTask = { id: maxId, name: action.payload.name };
-
-                    var tasks = [].concat(_toConsumableArray(this._state.tasks), [newTask]);
+                    var newTask = { id: action.payload.id, name: action.payload.name };
+                    tasks = [].concat(_toConsumableArray(this._state.tasks), [newTask]);
                     return { tasks: tasks, maxId: maxId };
 
-                // return update(this.getState(), {
-                //     tasks: {$push: [newTask] },
-                //     maxId: {$set: maxId}
-                // });
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].ADD_TASK_SUCCESS:
+                    console.log("ADD_TASK_SUCCESS");
+                    console.log(action.payload.response);
+                    var taskIndex = this.findIdIndex(action.payload.id);
+                    tasks[taskIndex].id = action.payload.response.id;
+                    return { tasks: tasks, maxId: maxId };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].ADD_TASK_ERROR:
+                    console.log("ADD_TASK_ERROR");
+                    console.log(action.payload.response);
+                    tasks.splice(this.findIdIndex(action.payload.id), 1);
+                    return { tasks: tasks, maxId: maxId };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].DELETE_TASK:
+                    console.log("DELETE_TASK");
+                    console.log(action.payload);
+                    console.log(tasks);
+
+                    index = this.findIdIndex(action.payload.id);
+                    if (index) {
+                        console.log("tttt" + index);
+                        console.log(tasks);
+                        this.setModifiedTasks({ index: index, task: { id: action.payload.id, name: tasks[index].name } });
+                        // deletedTasks = {id:action.payload.id, name: tasks[index].name};
+                    }
+                    // let deletedName = ( tasks[id] )? tasks[id].name: null;
+                    tasks.splice(this.findIdIndex(action.payload.id), 1);
+                    console.log(this.getModifiedTasks());
+
+                    return { tasks: tasks, maxId: maxId };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].DELETE_TASK_SUCCESS:
+                    console.log("DELETE_TASK_SUCCESS");
+                    // console.log(action.payload);
+                    // console.log(this.getModifiedTasks());
+                    this.setModifiedTasks({});
+                    return { tasks: tasks, maxId: maxId };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].DELETE_TASK_ERROR:
+                    console.log("DELETE_TASK_ERROR");
+                    console.log(action.payload);
+
+                    if (this.getModifiedTasks() != {} && this.getModifiedTasks().index && this.getModifiedTasks().task) {
+                        tasks.splice(this.getModifiedTasks().index, 0, this.getModifiedTasks().task);
+                        this.setModifiedTasks({});
+                    }
+                    console.log(tasks);
+                    // tasks.splice(this.findIdIndex(action.payload.id), 1);
+                    return { tasks: tasks, maxId: maxId };
+                    __WEBPACK_IMPORTED_MODULE_5_lodash___default.a;
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].EDIT_TASK:
+                    console.log("EDIT_TASK");
+                    console.log(action.payload.name);
+                    index = this.findIdIndex(action.payload.id);
+
+                    if (index) {
+                        console.log("ttttgif" + name);
+                        console.log(tasks);
+                        this.setModifiedTasks({ index: index, task: { id: action.payload.id, name: tasks[index].name } });
+                        console.log(this.getModifiedTasks());
+                        // deletedTasks = {id:action.payload.id, name: tasks[index].name};
+                    }
+
+                    tasks[index].name = action.payload.name;
+                    return { tasks: tasks, maxId: maxId };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].EDIT_TASK_SUCCESS:
+                    console.log("EDIT_TASK_SUCCESS");
+                    console.log(action.payload.response);
+                    this.setModifiedTasks({});
+                    return { tasks: tasks, maxId: maxId };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].EDIT_TASK_ERROR:
+                    console.log("EDIT_TASK_ERROR");
+                    console.log(action.payload.response);
+
+                    if (this.getModifiedTasks() != {} && this.getModifiedTasks().index && this.getModifiedTasks().task) {
+                        tasks[this.getModifiedTasks().index].name = this.getModifiedTasks().task.name;
+                        this.setModifiedTasks({});
+                    }
+
+                    return { tasks: tasks, maxId: maxId };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].FETCHTASKS:
+                    return {
+                        tasks: [],
+                        maxId: 1
+                    };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].FETCH_TASKS_SUCCESS:
+                    console.log(action.payload.response);
+                    var newTasks = action.payload.response.map(function (task) {
+                        return { id: task.id, name: task.name };
+                    });
+                    maxId = __WEBPACK_IMPORTED_MODULE_5_lodash___default.a.maxBy(newTasks, 'id').id;
+                    return { tasks: newTasks, maxId: maxId };
+
+                case __WEBPACK_IMPORTED_MODULE_4__constants__["a" /* default */].FETCH_TASKS_ERROR:
+                    return state;
 
                 default:
                     return state;

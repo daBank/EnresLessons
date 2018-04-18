@@ -18,9 +18,17 @@ class TaskAPIController extends Controller
     // {
     //     return view('tasks.index');
     // }
+    public function indexall()
+    {
+        
+        return Task::all();
+    }
+
     public function index()
     {
-        return Task::all();
+        $userId = Auth::id();
+        return Task::where( "user_id" , $userId )->get();
+        // return response()->json($userId, 201);
     }
 
     /**
@@ -76,7 +84,6 @@ class TaskAPIController extends Controller
      */
     public function delete(Request $request, $taskID)
     {
-
         $response['task_id'] = $taskID;
         
         $userId = Auth::id();
